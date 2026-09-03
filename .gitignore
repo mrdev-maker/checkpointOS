@@ -17,3 +17,4 @@ Backend/border_control.db
 .DS_Store
 Thumbs.db
 .venv
+.vscode/
