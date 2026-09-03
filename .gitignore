@@ -1,0 +1,18 @@
+# Ignore Python virtual environment
+Backend/venv/
+venv/
+env/
+
+# Ignore Python cache & temporary build files
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore local database & logs
+Backend/border_control.db
+*.db
+*.log
+
+# Ignore OS system files
+.DS_Store
+Thumbs.db
