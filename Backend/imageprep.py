@@ -1,3 +1,4 @@
+# 
 import cv2
 import numpy as np
 import os
@@ -33,14 +34,28 @@ def four_point_transform(image, pts):
     M = cv2.getPerspectiveTransform(rect, dst)
     warped = cv2.warpPerspective(image, M, (maxWidth, maxHeight))
     return warped
-
-def extract_universal_mrz(image_path):
-    if not os.path.exists(image_path):
-        return f"Error: File '{image_path}' not found."
+def extract_universal_mrz(input_source):
+    """
+    Accepts either an image path (str) or a pre-loaded BGR image (np.ndarray).
+    Returns a cleaned, normalized binary NumPy array of the MRZ region.
+    """
+    if isinstance(input_source, str):
+        if not os.path.exists(input_source):
+            raise FileNotFoundError(f"File '{input_source}' not found.")
+        image = cv2.imread(input_source)
+        if image is None:
+            raise ValueError(f"Could not decode image at '{input_source}'.")
+    elif isinstance(input_source, np.ndarray):
+        image = input_source.copy()
+    else:
+        raise TypeError("Input must be a valid file path string or numpy ndarray.")
+# def extract_universal_mrz(image_path):
+#     if not os.path.exists(image_path):
+#         return f"Error: File '{image_path}' not found."
         
-    image = cv2.imread(image_path)
-    if image is None:
-        return f"Error: OpenCV could not read '{image_path}'. Check file format."
+#     image = cv2.imread(image_path)
+#     if image is None:
+#         return f"Error: OpenCV could not read '{image_path}'. Check file format."
     
     orig = image.copy()
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -83,15 +98,22 @@ def extract_universal_mrz(image_path):
     # 7. Otsu's Thresholding
     _, clean_mrz = cv2.threshold(optimized_mrz, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
 
-    cv2.imshow(f"Output: {image_path}", clean_mrz)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # cv2.imshow(f"Output: {image_path}", clean_mrz)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()
     
     return clean_mrz
+if __name__ == "__main__":
+    test_img = "passport.webp"
+    if os.path.exists(test_img):
+        result = extract_universal_mrz(test_img)
+        cv2.imshow("Test MRZ Output", result)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
 # Execute the pipeline on both formats
-mrz_low_res = extract_universal_mrz("passport1.jpg")
-mrz_high_res = extract_universal_mrz("passport.webp")  
+# mrz_low_res = extract_universal_mrz("passport1.jpg")
+# mrz_high_res = extract_universal_mrz("passport.webp")  
 # from datetime import datetime
 
 # # Example MRZ Line 2 from your Taiwan Passport screenshot
