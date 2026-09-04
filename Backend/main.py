@@ -1,13 +1,11 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-# Testing my first pull request
 
 from ocr_service import call_ocr_space, extract_fields, parse_mrz_lines, MAX_FILE_SIZE
 
 app = FastAPI(title="CheckpointOS Backend")
 
-# Enable Cross-Origin Resource Sharing for the local frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,15 +37,14 @@ async def process_screening(
             detail="Document size exceeds 1MB limit for OCR processing",
         )
 
-    # Execute OCR processing
     try:
         raw_text = call_ocr_space(contents, document.filename)
-        fields = extract_fields(raw_text)
         mrz_data = parse_mrz_lines(raw_text)
+        fields = extract_fields(raw_text, mrz_data)
     except Exception as e:
-        print(f"[OCR Warning] Pipeline issue: {e}")
-        fields = extract_fields("")
+        print(f"[OCR Warning] Processing error: {e}")
         mrz_data = {}
+        fields = extract_fields("", {})
 
     passport_num = fields.passport_number or "UNREADABLE"
     mrz_passport = mrz_data.get("passport_number") or passport_num
@@ -57,6 +54,19 @@ async def process_screening(
 
     nationality = fields.nationality or "IND"
     mrz_nat = mrz_data.get("nationality") or nationality
+
+    viz_name = fields.name or "NOT FOUND"
+    mrz_name = mrz_data.get("full_name") or fields.name or "UNREADABLE"
+
+    name_match = bool(
+        viz_name != "NOT FOUND"
+        and mrz_name != "UNREADABLE"
+        and (
+            viz_name.lower() in mrz_name.lower()
+            or mrz_name.lower() in viz_name.lower()
+            or (fields.surname and fields.surname.lower() in mrz_name.lower())
+        )
+    )
 
     comparisons = [
         {
@@ -79,9 +89,9 @@ async def process_screening(
         },
         {
             "field": "Full Name",
-            "viz": fields.name or "NOT FOUND",
-            "mrz": fields.surname or "RECORDED",
-            "match": bool(fields.name),
+            "viz": viz_name,
+            "mrz": mrz_name,
+            "match": name_match,
         },
         {
             "field": "Biometric Match",
