@@ -1,3 +1,4 @@
+import re
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -42,7 +43,7 @@ async def process_screening(
         mrz_data = parse_mrz_lines(raw_text)
         fields = extract_fields(raw_text, mrz_data)
     except Exception as e:
-        print(f"[OCR Warning] Processing error: {e}")
+        print(f"[OCR Warning] Processing issue: {e}")
         mrz_data = {}
         fields = extract_fields("", {})
 
@@ -50,22 +51,38 @@ async def process_screening(
     mrz_passport = mrz_data.get("passport_number") or passport_num
 
     dob = fields.date_of_birth or "UNREADABLE"
-    mrz_dob = mrz_data.get("dob") or dob
+    mrz_dob = mrz_data.get("dob") or "UNREADABLE"
 
     nationality = fields.nationality or "IND"
     mrz_nat = mrz_data.get("nationality") or nationality
 
     viz_name = fields.name or "NOT FOUND"
-    mrz_name = mrz_data.get("full_name") or fields.name or "UNREADABLE"
+    mrz_name = mrz_data.get("full_name") or "UNREADABLE"
+
+    # Token-set reconciliation for names (handles initials, reordering, and multi-word names)
+    def clean_name_tokens(text: str) -> set[str]:
+        if not text or text in {"NOT FOUND", "UNREADABLE"}:
+            return set()
+        return set(re.findall(r"\b[A-Z]+\b", text.upper()))
+
+    viz_tokens = clean_name_tokens(viz_name)
+    mrz_tokens = clean_name_tokens(mrz_name)
 
     name_match = bool(
-        viz_name != "NOT FOUND"
-        and mrz_name != "UNREADABLE"
+        viz_tokens
+        and mrz_tokens
         and (
-            viz_name.lower() in mrz_name.lower()
-            or mrz_name.lower() in viz_name.lower()
-            or (fields.surname and fields.surname.lower() in mrz_name.lower())
+            viz_tokens == mrz_tokens
+            or viz_tokens.issubset(mrz_tokens)
+            or mrz_tokens.issubset(viz_tokens)
         )
+    )
+
+    # DOB match
+    dob_match = (
+        dob != "UNREADABLE"
+        and mrz_dob != "UNREADABLE"
+        and dob.strip() == mrz_dob.strip()
     )
 
     comparisons = [
@@ -79,7 +96,7 @@ async def process_screening(
             "field": "Date of Birth",
             "viz": dob,
             "mrz": mrz_dob,
-            "match": (dob != "UNREADABLE"),
+            "match": dob_match,
         },
         {
             "field": "Nationality",

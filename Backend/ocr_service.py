@@ -3,10 +3,9 @@ import requests
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-# Configuration for OCR.space engine
 OCR_SPACE_API_KEY = "K83274496588957"
 OCR_SPACE_URL = "https://api.ocr.space/parse/image"
-MAX_FILE_SIZE = 1 * 1024 * 1024  # 1 MB API limit
+MAX_FILE_SIZE = 1 * 1024 * 1024
 
 
 class ExtractedFields(BaseModel):
@@ -56,55 +55,72 @@ def parse_mrz_lines(raw_text: str) -> dict:
     mrz_data = {
         "passport_number": None,
         "dob": None,
-        "nationality": None,
+        "nationality": "IND",
         "surname": None,
         "given_name": None,
         "full_name": None,
     }
 
-    raw_lines = [l.strip().replace(" ", "") for l in raw_text.splitlines() if l.strip()]
+    raw_lines = [
+        re.sub(r"[^A-Z0-9<]", "", l.upper().strip())
+        for l in raw_text.splitlines()
+        if l.strip()
+    ]
 
     line1 = None
     line2 = None
 
     for line in raw_lines:
-        clean = re.sub(r"[^A-Z0-9<]", "", line.upper())
-        if clean.startswith("P<") or (len(clean) >= 35 and "<" in clean and "IND" in clean):
-            line1 = clean
-        elif len(clean) >= 35 and re.search(r"^[A-Z0-9]{8,10}", clean):
-            line2 = clean
+        if len(line) < 28:
+            continue
+        if line.startswith("P") and "<<" in line and not any(c.isdigit() for c in line[:10]):
+            line1 = line
+        elif any(c.isdigit() for c in line[:9]) and len(line) >= 28:
+            line2 = line
 
-    # Parse Line 1: P<INDTHAPLIYAL<<GARIMA<<<<<<<<<<<<<<<<<<<<<
+    # Parse Line 1: P<INDD<SOUZA<<LIONEL<PRAKASH<<<<<<<<<<<<<
     if line1:
         try:
-            name_portion = line1[5:] if line1.startswith("P") else line1
-            parts = [p.replace("<", " ").strip() for p in name_portion.split("<<") if p.strip()]
+            name_section = re.sub(r"^P<?[A-Z]{3}", "", line1).rstrip("<")
+            parts = name_section.split("<<")
 
             if len(parts) >= 2:
-                mrz_data["surname"] = parts[0]
-                mrz_data["given_name"] = parts[1].split("<")[0].strip()
+                mrz_data["surname"] = parts[0].replace("<", " ").strip()
+                mrz_data["given_name"] = parts[1].replace("<", " ").strip()
                 mrz_data["full_name"] = f"{mrz_data['given_name']} {mrz_data['surname']}".strip()
-            elif len(parts) == 1:
-                mrz_data["surname"] = parts[0]
-                mrz_data["full_name"] = parts[0]
+            elif len(parts) == 1 and parts[0]:
+                mrz_data["surname"] = parts[0].replace("<", " ").strip()
+                mrz_data["full_name"] = mrz_data["surname"]
         except Exception as e:
-            print(f"[MRZ Line 1 Parse Error]: {e}")
+            print(f"[MRZ Line 1 Error]: {e}")
 
-    # Parse Line 2: SP003369<2IND9407015F...
+    # Parse Line 2: S0525338<8IND7911093M2803180...
     if line2:
         try:
-            raw_pass = line2[0:9].replace("<", "")
+            raw_pass = line2[:9].split("<")[0].strip()
             mrz_data["passport_number"] = raw_pass
 
-            # Parse DOB (YYMMDD) at index 13:19
-            dob_yy = line2[13:15]
-            dob_mm = line2[15:17]
-            dob_dd = line2[17:19]
-            year_prefix = "19" if int(dob_yy) > 30 else "20"
-            mrz_data["dob"] = f"{dob_dd}/{dob_mm}/{year_prefix}{dob_yy}"
-            mrz_data["nationality"] = "IND"
+            # Strict MRZ DOB: Index 13 to 19 (YYMMDD)
+            if len(line2) >= 19:
+                dob_raw = line2[13:19]
+                if dob_raw.isdigit():
+                    yy = int(dob_raw[0:2])
+                    mm = dob_raw[2:4]
+                    dd = dob_raw[4:6]
+                    century = "19" if yy > 35 else "20"
+                    mrz_data["dob"] = f"{dd}/{mm}/{century}{yy:02d}"
+
+            if not mrz_data["dob"]:
+                match_dob = re.search(r"IND(\d{6})", line2)
+                if match_dob:
+                    dob_raw = match_dob.group(1)
+                    yy = int(dob_raw[0:2])
+                    mm = dob_raw[2:4]
+                    dd = dob_raw[4:6]
+                    century = "19" if yy > 35 else "20"
+                    mrz_data["dob"] = f"{dd}/{mm}/{century}{yy:02d}"
         except Exception as e:
-            print(f"[MRZ Line 2 Parse Error]: {e}")
+            print(f"[MRZ Line 2 Error]: {e}")
 
     return mrz_data
 
@@ -113,72 +129,74 @@ def extract_fields(raw_text: str, mrz_data: dict) -> ExtractedFields:
     lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
     full_text = "\n".join(lines)
 
-    # 1. Dates
+    # 1. Dates: Search all standard dates in document
     date_pattern = r"\b(\d{2}[/.\-]\d{2}[/.\-]\d{4})\b"
-    dates_found = re.findall(date_pattern, full_text)
-    dob, issue, expiry = None, None, None
-    if len(dates_found) == 1:
-        dob = dates_found[0]
-    elif len(dates_found) == 2:
-        dob, expiry = dates_found
-    elif len(dates_found) >= 3:
-        dob, issue, expiry = dates_found[0], dates_found[1], dates_found[-1]
+    dates_found = [re.sub(r"[.\-]", "/", d) for d in re.findall(date_pattern, full_text)]
 
-    if not dob and mrz_data.get("dob"):
+    dob = None
+    # If MRZ parsed a valid DOB, verify if it exists anywhere in visual text
+    if mrz_data.get("dob") and mrz_data["dob"] in dates_found:
         dob = mrz_data["dob"]
+    elif dates_found:
+        # Avoid picking up recent issue dates (e.g. 2018-2026) as DOB if person was born earlier
+        dob = dates_found[0]
+    
+    # Fall back to MRZ DOB if visual was blocked by watermark
+    if not dob or (mrz_data.get("dob") and dob != mrz_data.get("dob") and int(dob[-4:]) > 2005):
+        dob = mrz_data.get("dob") or dob
 
     # 2. Passport Number
-    passport_number = mrz_data.get("passport_number")
-    if not passport_number:
-        doc_match = re.search(r"\b[A-Z]{1,2}[0-9]{7,8}\b", full_text)
-        if doc_match:
-            passport_number = doc_match.group(0)
+    passport_number = None
+    pass_match = re.search(r"\b([A-Z]{1,2})\s?([0-9]{7,8})\b", full_text)
+    if pass_match:
+        passport_number = f"{pass_match.group(1)}{pass_match.group(2)}"
+    else:
+        passport_number = mrz_data.get("passport_number")
 
-    # 3. Visual Zone Name Extraction (handles bilingual labels & OCR shifts)
-    surname = None
-    given_names = None
+    # 3. Visual Name Recovery with MRZ Corroboration
+    mrz_tokens = set(re.findall(r"\b[A-Z]+\b", (mrz_data.get("full_name") or "").upper()))
+
+    surname_cands = []
+    given_cands = []
     junk_tokens = {
         "REPUBLIC", "INDIA", "INDIAN", "PASSPORT", "GOVERNMENT",
-        "SURNAME", "GIVEN", "NAME", "NAMES", "UNION", "OF"
+        "SURNAME", "GIVEN", "NAME", "NAMES", "UNION", "OF", "TYPE", "CODE",
+        "FEARAF", "MALE", "FEMALE"
     }
 
     for i, line in enumerate(lines):
         clean_line = line.lower()
-        if any(term in clean_line for term in ["surname", "upnam", "sur name"]):
+        if any(term in clean_line for term in ["surname", "upnam"]):
             for offset in (0, 1, 2):
                 if i + offset < len(lines):
                     cand = re.sub(r"[^A-Z\s]", "", lines[i + offset].upper()).strip()
-                    tokens = [w for w in cand.split() if w not in junk_tokens and len(w) > 2]
-                    if tokens:
-                        surname = " ".join(tokens)
+                    tokens = [w for w in cand.split() if w not in junk_tokens]
+                    if tokens and (not mrz_tokens or any(t in mrz_tokens for t in tokens)):
+                        surname_cands.append(" ".join(tokens))
                         break
 
-        if any(term in clean_line for term in ["given", "diya gaya"]):
+        if any(term in clean_line for term in ["given name", "diya gaya", "given"]):
             for offset in (0, 1, 2):
                 if i + offset < len(lines):
                     cand = re.sub(r"[^A-Z\s]", "", lines[i + offset].upper()).strip()
-                    tokens = [w for w in cand.split() if w not in junk_tokens and len(w) > 2]
-                    if tokens:
-                        given_names = " ".join(tokens)
+                    tokens = [w for w in cand.split() if w not in junk_tokens]
+                    if tokens and (not mrz_tokens or any(t in mrz_tokens for t in tokens)):
+                        given_cands.append(" ".join(tokens))
                         break
 
-    final_surname = surname or mrz_data.get("surname")
-    final_given = given_names or mrz_data.get("given_name")
+    final_surname = surname_cands[0] if surname_cands else mrz_data.get("surname")
+    final_given = given_cands[0] if given_cands else mrz_data.get("given_name")
 
     if final_given and final_surname:
         full_name = f"{final_given} {final_surname}".strip()
-    elif mrz_data.get("full_name"):
-        full_name = mrz_data["full_name"]
     else:
-        full_name = None
+        full_name = mrz_data.get("full_name")
 
     return ExtractedFields(
         surname=final_surname,
         given_names=final_given,
         name=full_name,
         date_of_birth=dob,
-        issue_date=issue,
-        expiry_date=expiry,
         passport_number=passport_number,
-        nationality=mrz_data.get("nationality") or "IND",
+        nationality="IND",
     )
