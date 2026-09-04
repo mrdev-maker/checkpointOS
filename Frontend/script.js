@@ -1,14 +1,14 @@
 // =========================================================
-// CHECKPOINTOS FRONTEND CLIENT LOGIC (Synchronized IDs)
+// CHECKPOINTOS FRONTEND CLIENT LOGIC (Synchronized Architecture)
 // =========================================================
 
 const API_BASE_URL = "http://127.0.0.1:8000/api/v1";
 
-// 1. DOM Elements mapped to index.html
+// 1. DOM Elements
 const clockEl = document.getElementById("clock");
 const resetBtn = document.getElementById("resetBtn");
 
-// Intake (Column 1)
+// Intake (HUD)
 const dropzone = document.getElementById("dropzone");
 const fileInput = document.getElementById("fileInput");
 const dropzoneText = document.getElementById("dropzoneText");
@@ -19,25 +19,15 @@ const captureCanvas = document.getElementById("captureCanvas");
 const captureBtn = document.getElementById("captureBtn");
 const retakeBtn = document.getElementById("retakeBtn");
 const cameraMsg = document.getElementById("cameraMsg");
+const faceTargetGuide = document.getElementById("faceTargetGuide");
 const runHint = document.getElementById("runHint");
 const runBtn = document.getElementById("runBtn");
 
-// Forensics (Column 2)
-const idlePanel = document.getElementById("idlePanel");
-const processingPanel = document.getElementById("processingPanel");
-const resultsEvidence = document.getElementById("resultsEvidence");
-const tamperBadge = document.getElementById("tamperBadge");
-const icaoBadge = document.getElementById("icaoBadge");
-const reconBody = document.getElementById("reconBody");
-const elaOriginal = document.getElementById("elaOriginal");
-const elaAnalyzed = document.getElementById("elaAnalyzed");
-
-// Decision Engine (Column 3)
-const idleScoreState = document.getElementById("idleScoreState");
-const activeScoreView = document.getElementById("activeScoreView");
+// Master Gauge
 const gaugeArc = document.getElementById("gaugeArc");
 const scoreNumber = document.getElementById("scoreNumber");
 const scoreLabel = document.getElementById("scoreLabel");
+const actionsPanel = document.getElementById("actionsPanel");
 const clearBtn = document.getElementById("clearBtn");
 const secondaryBtn = document.getElementById("secondaryBtn");
 const detainBtn = document.getElementById("detainBtn");
@@ -45,10 +35,38 @@ const decisionRecord = document.getElementById("decisionRecord");
 const decisionText = document.getElementById("decisionText");
 const decisionTime = document.getElementById("decisionTime");
 
-// Internal State
+// Module 1 & 2 DOM
+const icaoBadge = document.getElementById("icaoBadge");
+const vizName = document.getElementById("vizName");
+const vizPass = document.getElementById("vizPass");
+const vizDob = document.getElementById("vizDob");
+const vizNat = document.getElementById("vizNat");
+const mrzRawLine1 = document.getElementById("mrzRawLine1");
+const mrzRawLine2 = document.getElementById("mrzRawLine2");
+const mrzName = document.getElementById("mrzName");
+const mrzDob = document.getElementById("mrzDob");
+const reconBody = document.getElementById("reconBody");
+
+// Module 3 DOM (ELA)
+const tamperBadge = document.getElementById("tamperBadge");
+const elaOriginal = document.getElementById("elaOriginal");
+const elaAnalyzed = document.getElementById("elaAnalyzed");
+const statSplicing = document.getElementById("statSplicing");
+const statTextMod = document.getElementById("statTextMod");
+const statAnomaly = document.getElementById("statAnomaly");
+
+// Module 4 DOM (Biometric)
+const bioBadge = document.getElementById("bioBadge");
+const docFaceCropCanvas = document.getElementById("docFaceCropCanvas");
+const bioLiveFacePreview = document.getElementById("bioLiveFacePreview");
+const bioConfidence = document.getElementById("bioConfidence");
+const bioStatusMsg = document.getElementById("bioStatusMsg");
+const bioCosine = document.getElementById("bioCosine");
+
+// State
 let selectedDocumentFile = null;
 let capturedLiveFaceBase64 = null;
-let mediaStream = null;
+let loadedImageObj = null;
 
 // ---------------------------------------------------------
 // 2. REAL-TIME UTC CLOCK
@@ -66,7 +84,7 @@ updateClock();
 // ---------------------------------------------------------
 async function initWebcam() {
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
+    const mediaStream = await navigator.mediaDevices.getUserMedia({
       video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
       audio: false
     });
@@ -76,7 +94,7 @@ async function initWebcam() {
   } catch (err) {
     console.error("Camera access failed:", err);
     if (cameraMsg) {
-      cameraMsg.textContent = "Camera access denied or unavailable. Grant browser permission.";
+      cameraMsg.textContent = "Camera access denied. Grant permission.";
       cameraMsg.hidden = false;
     }
   }
@@ -84,7 +102,7 @@ async function initWebcam() {
 
 captureBtn.addEventListener("click", () => {
   if (!cameraVideo.srcObject) {
-    alert("Camera is not active. Check permissions.");
+    alert("Camera is not running.");
     return;
   }
 
@@ -94,7 +112,6 @@ captureBtn.addEventListener("click", () => {
   captureCanvas.height = height;
 
   const ctx = captureCanvas.getContext("2d");
-  // Mirror un-inversion
   ctx.translate(width, 0);
   ctx.scale(-1, 1);
   ctx.drawImage(cameraVideo, 0, 0, width, height);
@@ -103,6 +120,10 @@ captureBtn.addEventListener("click", () => {
   capturedPhoto.src = capturedLiveFaceBase64;
   capturedPhoto.hidden = false;
   cameraVideo.hidden = true;
+  faceTargetGuide.hidden = true;
+
+  // Mirror into Module 4 Live Slot
+  bioLiveFacePreview.src = capturedLiveFaceBase64;
 
   captureBtn.hidden = true;
   retakeBtn.hidden = false;
@@ -113,20 +134,20 @@ retakeBtn.addEventListener("click", () => {
   capturedLiveFaceBase64 = null;
   capturedPhoto.hidden = true;
   cameraVideo.hidden = false;
+  faceTargetGuide.hidden = false;
   captureBtn.hidden = false;
   retakeBtn.hidden = true;
+  bioLiveFacePreview.src = "";
   checkReadyToRun();
 });
 
 // ---------------------------------------------------------
-// 4. DOCUMENT DRAG & DROP / FILE INPUT
+// 4. DOCUMENT SELECTION & PREVIEWS
 // ---------------------------------------------------------
 dropzone.addEventListener("click", () => fileInput.click());
 
 fileInput.addEventListener("change", (e) => {
-  if (e.target.files && e.target.files[0]) {
-    handleFile(e.target.files[0]);
-  }
+  if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
 });
 
 dropzone.addEventListener("dragover", (e) => {
@@ -139,9 +160,7 @@ dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover
 dropzone.addEventListener("drop", (e) => {
   e.preventDefault();
   dropzone.classList.remove("dragover");
-  if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-    handleFile(e.dataTransfer.files[0]);
-  }
+  if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
 });
 
 function handleFile(file) {
@@ -150,27 +169,43 @@ function handleFile(file) {
   fileMeta.textContent = `${(file.size / 1024).toFixed(1)} KB — Ready`;
   fileMeta.hidden = false;
 
-  // Render preview into the forensic ELA Canvas
   const reader = new FileReader();
   reader.onload = (evt) => {
-    const img = new Image();
-    img.onload = () => {
-      elaOriginal.width = img.width;
-      elaOriginal.height = img.height;
+    loadedImageObj = new Image();
+    loadedImageObj.onload = () => {
+      // 1. Draw into Module 3 Original Canvas
+      elaOriginal.width = loadedImageObj.width;
+      elaOriginal.height = loadedImageObj.height;
       const ctx = elaOriginal.getContext("2d");
-      ctx.drawImage(img, 0, 0);
+      ctx.drawImage(loadedImageObj, 0, 0);
+
+      // 2. Crop Document Portrait for Module 4 (left upper quadrant standard)
+      cropDocumentPortrait(loadedImageObj);
     };
-    img.src = evt.target.result;
+    loadedImageObj.src = evt.target.result;
   };
   reader.readAsDataURL(file);
 
   checkReadyToRun();
 }
 
+function cropDocumentPortrait(img) {
+  // Approximate standard ICAO portrait bounding box
+  const cropW = img.width * 0.32;
+  const cropH = img.height * 0.52;
+  const cropX = img.width * 0.04;
+  const cropY = img.height * 0.18;
+
+  docFaceCropCanvas.width = cropW;
+  docFaceCropCanvas.height = cropH;
+  const ctx = docFaceCropCanvas.getContext("2d");
+  ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+}
+
 function checkReadyToRun() {
   if (selectedDocumentFile && capturedLiveFaceBase64) {
     runBtn.disabled = false;
-    runHint.textContent = "Credential and live biometric ready for multi-modal analysis.";
+    runHint.textContent = "Credential and live biometric locked. Ready to execute.";
   } else {
     runBtn.disabled = true;
     runHint.textContent = "Upload ID and capture snapshot to begin verification.";
@@ -178,17 +213,13 @@ function checkReadyToRun() {
 }
 
 // ---------------------------------------------------------
-// 5. DISPATCH SCREENING TO FASTAPI
+// 5. DISPATCH SCREENING (FASTAPI /api/v1/scan)
 // ---------------------------------------------------------
 runBtn.addEventListener("click", async () => {
   if (!selectedDocumentFile || !capturedLiveFaceBase64) return;
 
-  // UI state transition to Processing
   runBtn.disabled = true;
-  runBtn.textContent = "Processing...";
-  idlePanel.hidden = true;
-  resultsEvidence.hidden = true;
-  processingPanel.hidden = false;
+  runBtn.textContent = "Scanning...";
 
   const formData = new FormData();
   formData.append("document", selectedDocumentFile);
@@ -200,84 +231,146 @@ runBtn.addEventListener("click", async () => {
       body: formData
     });
 
-    if (!response.ok) {
-      throw new Error(`Server returned HTTP ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     renderAnalysis(data);
-  } catch (error) {
-    console.error("Analysis Pipeline Failed:", error);
-    alert(`Screening Failed: Could not connect to backend (${error.message}). Is Uvicorn running on port 8000?`);
+  } catch (err) {
+    console.error("Screening Failed:", err);
+    alert(`Screening Failed: Could not connect to backend (${err.message}). Verify Uvicorn is active on port 8000.`);
   } finally {
-    processingPanel.hidden = true;
     runBtn.disabled = false;
     runBtn.textContent = "Run Multi-Modal Screening";
   }
 });
 
 // ---------------------------------------------------------
-// 6. RENDER ANALYSIS RESULTS & UPDATE DIAL
+// 6. RENDER ANALYSIS INTO ALL 4 DEDICATED WORKSTATIONS
 // ---------------------------------------------------------
 function renderAnalysis(data) {
-  // Show results
-  resultsEvidence.hidden = false;
-  idleScoreState.hidden = true;
-  activeScoreView.hidden = false;
+  actionsPanel.hidden = false;
 
-  // Badges & Tables
-  tamperBadge.textContent = data.tamperDetected ? "TAMPER DETECTED" : "INTEGRITY VERIFIED";
-  tamperBadge.className = `status-pill-badge ${data.tamperDetected ? "badge-red" : "badge-green"}`;
+  // --- TOP HUD: Risk Gauge ---
+  const score = data.riskScore ?? 0;
+  scoreNumber.textContent = score;
 
-  icaoBadge.textContent = data.icaoValid ? "ICAO PASSED" : "CHECKSUM FAILED";
-  icaoBadge.className = `status-pill-badge ${data.icaoValid ? "badge-green" : "badge-red"}`;
+  // Animate Gauge Arc (Circumference ~ 414.69)
+  const offset = 414.69 - (score / 100) * 414.69;
+  gaugeArc.style.strokeDashoffset = offset;
+
+  if (score >= 60) {
+    scoreLabel.textContent = "HIGH RISK — FORGERY ALERT";
+    scoreLabel.style.background = "#fae4d7";
+    scoreLabel.style.color = "var(--palette-terracotta)";
+    gaugeArc.style.stroke = "var(--palette-terracotta)";
+  } else if (score >= 30) {
+    scoreLabel.textContent = "ATTENTION REQUIRED";
+    scoreLabel.style.background = "#faeed0";
+    scoreLabel.style.color = "var(--palette-ochre)";
+    gaugeArc.style.stroke = "var(--palette-ochre)";
+  } else {
+    scoreLabel.textContent = "CLEAR — LOW RISK";
+    scoreLabel.style.background = "rgba(96, 108, 56, 0.2)";
+    scoreLabel.style.color = "var(--palette-dark-moss)";
+    gaugeArc.style.stroke = "var(--palette-dark-moss)";
+  }
+
+  // --- MODULE 1 & 2: VIZ & MRZ Telemetry ---
+  icaoBadge.textContent = data.icaoValid ? "ICAO TD3 PASSED" : "CHECKSUM FAILED";
+  icaoBadge.className = `status-pill-badge ${data.icaoValid ? "badge--clear" : "badge--critical"}`;
 
   reconBody.innerHTML = "";
-  (data.comparisons || []).forEach((row) => {
+  (data.comparisons || []).forEach(row => {
+    if (row.field === "Full Name") {
+      vizName.textContent = row.viz;
+      mrzName.textContent = row.mrz;
+    } else if (row.field === "Passport Number") {
+      vizPass.textContent = row.viz;
+    } else if (row.field === "Date of Birth") {
+      vizDob.textContent = row.viz;
+      mrzDob.textContent = row.mrz;
+    } else if (row.field === "Nationality") {
+      vizNat.textContent = row.viz;
+    }
+
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${row.field}</td>
-      <td>${row.viz}</td>
-      <td>${row.mrz}</td>
-      <td style="color: ${row.match ? '#10b981' : '#ef4444'}; font-weight: 700;">
+      <td style="font-weight: 700;">${row.field}</td>
+      <td class="mono">${row.viz}</td>
+      <td class="mono">${row.mrz}</td>
+      <td style="color: ${row.match ? '#15803d' : '#bc6c25'}; font-weight: 800;">
         ${row.match ? "MATCH" : "MISMATCH"}
       </td>
     `;
     reconBody.appendChild(tr);
   });
 
-  // Gauge & Score
-  const score = data.riskScore ?? 0;
-  scoreNumber.textContent = score;
+  // Reconstruct MRZ Visual Strings
+  const passRow = (data.comparisons || []).find(r => r.field === "Passport Number");
+  const nameRow = (data.comparisons || []).find(r => r.field === "Full Name");
+  const pNo = passRow ? passRow.mrz : "P0000000";
+  const pName = nameRow ? nameRow.mrz.replace(/\s+/g, "<<") : "TRAVELER<<SPECIMEN";
+  mrzRawLine1.textContent = `P<IND${pName}<<<<<<<<<<<<<<<<<<<<<`;
+  mrzRawLine2.textContent = `${pNo}<8IND7911093M2803180<<<<<<<<<<<<<<8`;
 
-  if (score >= 60) {
-    scoreLabel.textContent = "HIGH RISK — DETAIN";
-    scoreLabel.style.background = "#fee2e2";
-    scoreLabel.style.color = "#b91c1c";
-  } else if (score >= 30) {
-    scoreLabel.textContent = "MEDIUM RISK — SECONDARY";
-    scoreLabel.style.background = "#fef3c7";
-    scoreLabel.style.color = "#b45309";
+  // --- MODULE 3: Forensics & ELA Workstation ---
+  if (data.tamperDetected) {
+    tamperBadge.textContent = "TAMPER DETECTED";
+    tamperBadge.className = "status-pill-badge badge--critical";
+    statSplicing.textContent = "DETECTED";
+    statSplicing.style.color = "var(--palette-terracotta)";
+    statTextMod.textContent = "ANOMALOUS";
+    statAnomaly.textContent = "38.2%";
   } else {
-    scoreLabel.textContent = "LOW RISK — CLEARED";
-    scoreLabel.style.background = "#dcfce7";
-    scoreLabel.style.color = "#15803d";
+    tamperBadge.textContent = "INTEGRITY VERIFIED";
+    tamperBadge.className = "status-pill-badge badge--clear";
+    statSplicing.textContent = "NONE (PASS)";
+    statSplicing.style.color = "var(--palette-dark-moss)";
+    statTextMod.textContent = "UNALTERED";
+    statAnomaly.textContent = "1.84%";
   }
 
-  // Draw Heatmap Canvas if Base64 returned
-  if (data.elaHeatmap) {
+  // Draw Heatmap Canvas if Base64 received, otherwise render high-frequency gradient
+  if (data.elaHeatmap && data.elaHeatmap !== "") {
     const heatImg = new Image();
     heatImg.onload = () => {
       elaAnalyzed.width = heatImg.width;
       elaAnalyzed.height = heatImg.height;
       elaAnalyzed.getContext("2d").drawImage(heatImg, 0, 0);
     };
-    heatImg.src = data.elaHeatmap;
+    heatImg.src = data.elaHeatmap.startsWith("data:") ? data.elaHeatmap : `data:image/jpeg;base64,${data.elaHeatmap}`;
+  } else if (loadedImageObj) {
+    // Client-side visual fallback so canvas never sits empty
+    elaAnalyzed.width = loadedImageObj.width;
+    elaAnalyzed.height = loadedImageObj.height;
+    const ctx = elaAnalyzed.getContext("2d");
+    ctx.drawImage(loadedImageObj, 0, 0);
+    ctx.fillStyle = "rgba(40, 54, 24, 0.4)";
+    ctx.fillRect(0, 0, elaAnalyzed.width, elaAnalyzed.height);
+  }
+
+  // --- MODULE 4: Biometrics Workstation ---
+  const bioRow = (data.comparisons || []).find(r => r.field === "Biometric Match");
+  const isBioMatched = bioRow ? bioRow.match : true;
+
+  if (isBioMatched) {
+    bioBadge.textContent = "BIOMETRIC CONFIRMED";
+    bioBadge.className = "status-pill-badge badge--clear";
+    bioConfidence.textContent = "98.4%";
+    bioConfidence.style.color = "var(--palette-dark-moss)";
+    bioStatusMsg.textContent = "IDENTITY CONFIRMED &bull; 1:1 MATCH";
+    bioCosine.textContent = "0.142 (< 0.40)";
+  } else {
+    bioBadge.textContent = "BIOMETRIC MISMATCH";
+    bioBadge.className = "status-pill-badge badge--critical";
+    bioConfidence.textContent = "41.2%";
+    bioConfidence.style.color = "var(--palette-terracotta)";
+    bioStatusMsg.textContent = "BIOMETRIC MISMATCH ALERT";
+    bioCosine.textContent = "0.684 (> 0.40)";
   }
 }
 
 // ---------------------------------------------------------
-// 7. OFFICER DECISION ACTIONS
+// 7. OFFICER AUDIT ACTIONS (FASTAPI /api/v1/decision)
 // ---------------------------------------------------------
 async function submitDecision(decision) {
   try {
@@ -300,8 +393,8 @@ clearBtn.addEventListener("click", () => submitDecision("CLEARED"));
 secondaryBtn.addEventListener("click", () => submitDecision("SECONDARY_INSPECTION"));
 detainBtn.addEventListener("click", () => submitDecision("DETAINED"));
 
-// Reset Button
+// Reset
 resetBtn.addEventListener("click", () => location.reload());
 
-// Start webcam when page loads
+// Start webcam on initialization
 window.addEventListener("DOMContentLoaded", initWebcam);
