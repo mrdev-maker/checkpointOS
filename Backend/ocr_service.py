@@ -239,7 +239,8 @@ def parse_mrz_lines(raw_text: str) -> dict:
     mrz_data = {
     "passport_number": None,
     "dob": None,
-    "nationality": "IND",
+    "expiry_date": None,
+    "nationality": None,
     "surname": None,
     "given_name": None,
     "full_name": None,
@@ -294,6 +295,26 @@ def parse_mrz_lines(raw_text: str) -> dict:
             raw_pass = line2[:9].split("<")[0].strip()
             mrz_data["passport_number"] = raw_pass
 
+            # Nationality: TD3 positions 11-13
+            if len(line2) >= 13:
+                nationality = line2[10:13].replace("<", "")
+                
+                
+                mrz_data["nationality"] = nationality
+                    
+
+
+            # Expiry date: TD3 positions 22-27 (YYMMDD)
+            if len(line2) >= 27:
+                expiry_raw = line2[21:27]
+
+                if expiry_raw.isdigit():
+                    yy = int(expiry_raw[0:2])
+                    mm = expiry_raw[2:4]
+                    dd = expiry_raw[4:6]
+
+                    mrz_data["expiry_date"] = f"{dd}/{mm}/20{yy:02d}"        
+
             # Strict MRZ DOB: Index 13 to 19 (YYMMDD)
             if len(line2) >= 19:
                 dob_raw = line2[13:19]
@@ -305,7 +326,7 @@ def parse_mrz_lines(raw_text: str) -> dict:
                     mrz_data["dob"] = f"{dd}/{mm}/{century}{yy:02d}"
 
             if not mrz_data["dob"]:
-                match_dob = re.search(r"IND(\d{6})", line2)
+                match_dob = re.search(r"[A-Z]{3}(\d{6})", line2)
                 if match_dob:
                     dob_raw = match_dob.group(1)
                     yy = int(dob_raw[0:2])
@@ -366,6 +387,42 @@ def extract_fields(raw_text: str, mrz_data: dict) -> ExtractedFields:
     if not dob or (mrz_data.get("dob") and dob != mrz_data.get("dob") and int(dob[-4:]) > 2005):
         dob = mrz_data.get("dob") or dob
 
+    # Expiry date from visual text
+    expiry_date = None
+
+    for i, line in enumerate(lines):
+        clean_line = line.lower()
+
+        if any(term in clean_line for term in [
+            "date of expiry",
+            "date of expiration",
+            "expiry",
+            "expiration",
+            "valid until",
+            "valid till"
+        ]):
+            for offset in (0, 1, 2):
+                if i + offset < len(lines):
+                    match = re.search(
+                        date_pattern,
+                        lines[i + offset]
+                    )
+
+                    if match:
+                        expiry_date = re.sub(
+                            r"[.\-]",
+                            "/",
+                            match.group(1)
+                        )
+                        break
+
+            if expiry_date:
+                break
+
+    # Fall back to MRZ expiry if VIZ expiry wasn't found
+    if not expiry_date:
+        expiry_date = mrz_data.get("expiry_date")
+
     # 2. Passport Number
     passport_number = None
     pass_match = re.search(r"\b([A-Z]{1,2})\s?([0-9]{7,8})\b", full_text)
@@ -413,11 +470,41 @@ def extract_fields(raw_text: str, mrz_data: dict) -> ExtractedFields:
     else:
         full_name = mrz_data.get("full_name")
 
+    # Nationality from visual text
+    visual_nationality = None
+
+    for i, line in enumerate(lines):
+        clean_line = line.lower()
+
+        if "nationality" in clean_line:
+            for offset in (0, 1, 2):
+                if i + offset < len(lines):
+                    candidate = re.sub(
+                        r"[^A-Z]",
+                        "",
+                        lines[i + offset].upper()
+                    )
+
+                    if candidate in {"INDIAN", "IND"}:
+                        visual_nationality = "IND"
+                        break
+
+            if visual_nationality:
+                break
+
+    final_nationality = (
+        visual_nationality
+        or mrz_data.get("nationality")
+)
+
+    
+
     return ExtractedFields(
         surname=final_surname,
         given_names=final_given,
         name=full_name,
         date_of_birth=dob,
+        expiry_date=expiry_date,
         passport_number=passport_number,
-        nationality="IND",
+        nationality=final_nationality,
     )

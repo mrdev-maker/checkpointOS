@@ -52,6 +52,7 @@ async def process_screening(
         raw_text = call_ocr_space(contents, document.filename)
         mrz_data = parse_mrz_lines(raw_text)
         fields = extract_fields(raw_text, mrz_data)
+
     except Exception as e:
         print(f"[OCR Warning] Processing issue: {e}")
         mrz_data = {}
@@ -63,7 +64,7 @@ async def process_screening(
     dob = fields.date_of_birth or "UNREADABLE"
     mrz_dob = mrz_data.get("dob") or "UNREADABLE"
 
-    nationality = fields.nationality or "IND"
+    nationality = fields.nationality or "NOT FOUND"
     mrz_nat = mrz_data.get("nationality") or nationality
 
     viz_name = fields.name or "NOT FOUND"
@@ -126,6 +127,16 @@ async def process_screening(
             "mrz": "Live Feed",
             "match": True,
         },
+        {
+            "field": "Expiry Date",
+            "viz": fields.expiry_date or "NOT FOUND",
+            "mrz": mrz_data.get("expiry_date") or "NOT FOUND",
+            "match": (
+                fields.expiry_date is not None
+                and mrz_data.get("expiry_date") is not None
+                and fields.expiry_date == mrz_data.get("expiry_date")
+            ),
+        },
     ]
 
    # VIZ ↔ MRZ risk
@@ -134,6 +145,7 @@ async def process_screening(
     "Date of Birth": 10,
     "Nationality": 5,
     "Full Name": 10,
+    "Expiry Date": 5,
 }
 
     viz_risk = sum(
