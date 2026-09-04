@@ -2,6 +2,7 @@ import re
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from ela import analyze_ela
 
 from ocr_service import call_ocr_space, extract_fields, parse_mrz_lines, MAX_FILE_SIZE
 
@@ -29,6 +30,11 @@ def read_root():
 async def process_screening(
     document: UploadFile = File(...), live_face: str = Form(...)
 ):
+    
+    document_bytes = await document.read()
+    ela_result = analyze_ela(document_bytes)
+
+
     contents = await document.read()
     if not contents:
         raise HTTPException(status_code=400, detail="Empty document received")
@@ -123,9 +129,9 @@ async def process_screening(
 
     return {
         "riskScore": min(calculated_score, 100),
-        "tamperDetected": False,
+        "tamperDetected": ela_result["tamperDetected"],
         "icaoValid": mismatches == 0,
-        "elaHeatmap": "",
+        "elaHeatmap": ela_result["heatmapDataUrl"],
         "comparisons": comparisons,
     }
 
