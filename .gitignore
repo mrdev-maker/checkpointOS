@@ -16,3 +16,5 @@ Backend/border_control.db
 # Ignore OS system files
 .DS_Store
 Thumbs.db
+.venv
+.vscode/
