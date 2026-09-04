@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 OCR_SPACE_API_KEY = "K83274496588957"
 OCR_SPACE_URL = "https://api.ocr.space/parse/image"
-MAX_FILE_SIZE = 1 * 1024 * 1024
+MAX_FILE_SIZE = 2 * 1024 * 1024
 
 
 class ExtractedFields(BaseModel):
@@ -50,16 +50,210 @@ def call_ocr_space(file_bytes: bytes, filename: str) -> str:
     raw_text = parsed_results[0].get("ParsedText", "")
     return raw_text
 
+def mrz_check_digit(data: str) -> str:
+    """
+    Calculate an ICAO 9303 MRZ check digit.
+
+    Character values:
+        0-9 = 0-9
+        A-Z = 10-35
+        <   = 0
+
+    Repeating weights:
+        7, 3, 1
+    """
+
+    weights = [7, 3, 1]
+    total = 0
+
+    for i, char in enumerate(data):
+        if char == "<":
+            value = 0
+        elif char.isdigit():
+            value = int(char)
+        elif "A" <= char <= "Z":
+            value = ord(char) - ord("A") + 10
+        else:
+            value = 0
+
+        total += value * weights[i % 3]
+
+    return str(total % 10)
+
+def validate_td3_mrz(line1: str, line2: str) -> dict:
+    """
+    Validate a TD3 passport MRZ using ICAO check digits.
+
+    TD3 passport MRZ:
+        Line 1 = 44 characters
+        Line 2 = 44 characters
+    """
+
+    result = {
+        "valid": False,
+        "check_digits": {
+            "passport_number": False,
+            "dob": False,
+            "expiry_date": False,
+            "composite": False,
+        },
+        "errors": [],
+    }
+
+    # --------------------------------------------------
+    # 1. Validate MRZ line lengths
+    # --------------------------------------------------
+
+    if len(line1) != 44 or len(line2) != 44:
+        result["errors"].append(
+            "MRZ must contain two 44-character lines"
+        )
+        return result
+
+    # --------------------------------------------------
+    # 2. Passport number check digit
+    #
+    # Line 2:
+    # 0-8  = passport number
+    # 9    = check digit
+    # --------------------------------------------------
+
+    passport_number = line2[0:9]
+    passport_check_digit = line2[9]
+
+    calculated_passport_digit = mrz_check_digit(
+        passport_number
+    )
+
+    passport_valid = (
+        calculated_passport_digit
+        == passport_check_digit
+    )
+
+    result["check_digits"]["passport_number"] = (
+        passport_valid
+    )
+
+    if not passport_valid:
+        result["errors"].append(
+            "Passport number check digit failed"
+        )
+
+    # --------------------------------------------------
+    # 3. Date of birth check digit
+    #
+    # 13-18 = YYMMDD
+    # 19    = check digit
+    # --------------------------------------------------
+
+    dob = line2[13:19]
+    dob_check_digit = line2[19]
+
+    calculated_dob_digit = mrz_check_digit(dob)
+
+    dob_valid = (
+        calculated_dob_digit
+        == dob_check_digit
+    )
+
+    result["check_digits"]["dob"] = dob_valid
+
+    if not dob_valid:
+        result["errors"].append(
+            "Date of birth check digit failed"
+        )
+
+    # --------------------------------------------------
+    # 4. Expiry date check digit
+    #
+    # 21-26 = YYMMDD
+    # 27    = check digit
+    # --------------------------------------------------
+
+    expiry = line2[21:27]
+    expiry_check_digit = line2[27]
+
+    calculated_expiry_digit = mrz_check_digit(
+        expiry
+    )
+
+    expiry_valid = (
+        calculated_expiry_digit
+        == expiry_check_digit
+    )
+
+    result["check_digits"]["expiry_date"] = (
+        expiry_valid
+    )
+
+    if not expiry_valid:
+        result["errors"].append(
+            "Expiry date check digit failed"
+        )
+
+    # --------------------------------------------------
+    # 5. Composite check digit
+    #
+    # Passport number + check digit
+    # DOB + check digit
+    # Expiry date + personal number
+    # --------------------------------------------------
+
+    composite_data = (
+        line2[0:10]
+        + line2[13:20]
+        + line2[21:43]
+    )
+
+    composite_check_digit = line2[43]
+
+    calculated_composite_digit = mrz_check_digit(
+        composite_data
+    )
+
+    composite_valid = (
+        calculated_composite_digit
+        == composite_check_digit
+    )
+
+    result["check_digits"]["composite"] = (
+        composite_valid
+    )
+
+    if not composite_valid:
+        result["errors"].append(
+            "Composite check digit failed"
+        )
+
+    # --------------------------------------------------
+    # 6. Final validity
+    # --------------------------------------------------
+
+    result["valid"] = all(
+        result["check_digits"].values()
+    )
+
+    return result
 
 def parse_mrz_lines(raw_text: str) -> dict:
     mrz_data = {
-        "passport_number": None,
-        "dob": None,
-        "nationality": "IND",
-        "surname": None,
-        "given_name": None,
-        "full_name": None,
-    }
+    "passport_number": None,
+    "dob": None,
+    "nationality": "IND",
+    "surname": None,
+    "given_name": None,
+    "full_name": None,
+
+    # MRZ validation
+    "valid": False,
+    "check_digits": {
+        "passport_number": False,
+        "dob": False,
+        "expiry_date": False,
+        "composite": False,
+    },
+    "errors": [],
+}
 
     raw_lines = [
         re.sub(r"[^A-Z0-9<]", "", l.upper().strip())
@@ -121,6 +315,33 @@ def parse_mrz_lines(raw_text: str) -> dict:
                     mrz_data["dob"] = f"{dd}/{mm}/{century}{yy:02d}"
         except Exception as e:
             print(f"[MRZ Line 2 Error]: {e}")
+
+    # --------------------------------------------------
+    # ICAO MRZ VALIDATION
+    # --------------------------------------------------
+
+    if line1 and line2:
+
+        validation = validate_td3_mrz(
+            line1,
+            line2,
+        )
+
+        mrz_data["valid"] = validation["valid"]
+
+        mrz_data["check_digits"] = (
+            validation["check_digits"]
+        )
+
+        mrz_data["errors"] = (
+            validation["errors"]
+        )
+
+    else:
+
+        mrz_data["errors"].append(
+            "Could not detect both MRZ lines"
+        )
 
     return mrz_data
 
