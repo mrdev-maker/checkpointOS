@@ -53,6 +53,7 @@ const elaOriginal = document.getElementById("elaOriginal");
 const elaAnalyzed = document.getElementById("elaAnalyzed");
 const statSplicing = document.getElementById("statSplicing");
 const statTextMod = document.getElementById("statTextMod");
+const statResave = document.getElementById("statResave");
 const statAnomaly = document.getElementById("statAnomaly");
 
 // Module 4 DOM (Biometric)
@@ -122,7 +123,6 @@ captureBtn.addEventListener("click", () => {
   cameraVideo.hidden = true;
   faceTargetGuide.hidden = true;
 
-  // Mirror into Module 4 Live Slot
   bioLiveFacePreview.src = capturedLiveFaceBase64;
 
   captureBtn.hidden = true;
@@ -173,13 +173,11 @@ function handleFile(file) {
   reader.onload = (evt) => {
     loadedImageObj = new Image();
     loadedImageObj.onload = () => {
-      // 1. Draw into Module 3 Original Canvas
       elaOriginal.width = loadedImageObj.width;
       elaOriginal.height = loadedImageObj.height;
       const ctx = elaOriginal.getContext("2d");
       ctx.drawImage(loadedImageObj, 0, 0);
 
-      // 2. Crop Document Portrait for Module 4 (left upper quadrant standard)
       cropDocumentPortrait(loadedImageObj);
     };
     loadedImageObj.src = evt.target.result;
@@ -190,7 +188,6 @@ function handleFile(file) {
 }
 
 function cropDocumentPortrait(img) {
-  // Approximate standard ICAO portrait bounding box
   const cropW = img.width * 0.32;
   const cropH = img.height * 0.52;
   const cropX = img.width * 0.04;
@@ -244,7 +241,7 @@ runBtn.addEventListener("click", async () => {
 });
 
 // ---------------------------------------------------------
-// 6. RENDER ANALYSIS INTO ALL 4 DEDICATED WORKSTATIONS
+// 6. RENDER ANALYSIS INTO WORKSTATIONS
 // ---------------------------------------------------------
 function renderAnalysis(data) {
   actionsPanel.hidden = false;
@@ -253,7 +250,6 @@ function renderAnalysis(data) {
   const score = data.riskScore ?? 0;
   scoreNumber.textContent = score;
 
-  // Animate Gauge Arc (Circumference ~ 414.69)
   const offset = 414.69 - (score / 100) * 414.69;
   gaugeArc.style.strokeDashoffset = offset;
 
@@ -304,7 +300,6 @@ function renderAnalysis(data) {
     reconBody.appendChild(tr);
   });
 
-  // Reconstruct MRZ Visual Strings
   const passRow = (data.comparisons || []).find(r => r.field === "Passport Number");
   const nameRow = (data.comparisons || []).find(r => r.field === "Full Name");
   const pNo = passRow ? passRow.mrz : "P0000000";
@@ -312,24 +307,45 @@ function renderAnalysis(data) {
   mrzRawLine1.textContent = `P<IND${pName}<<<<<<<<<<<<<<<<<<<<<`;
   mrzRawLine2.textContent = `${pNo}<8IND7911093M2803180<<<<<<<<<<<<<<8`;
 
-  // --- MODULE 3: Forensics & ELA Workstation ---
-  if (data.tamperDetected) {
+  // --- MODULE 3: Forensics & ELA Workstation (Dynamic Scoring) ---
+  const elaScore = Number(data.elaScore || 0);
+  const anomalyScore = Number(data.localAnomalyScore || elaScore || 0);
+  const isTampered = Boolean(data.tamperDetected);
+
+  statAnomaly.textContent = `${anomalyScore.toFixed(2)}%`;
+
+  if (isTampered) {
     tamperBadge.textContent = "TAMPER DETECTED";
     tamperBadge.className = "status-pill-badge badge--critical";
+
     statSplicing.textContent = "DETECTED";
     statSplicing.style.color = "var(--palette-terracotta)";
+
     statTextMod.textContent = "ANOMALOUS";
-    statAnomaly.textContent = "38.2%";
+    statTextMod.style.color = "var(--palette-terracotta)";
+
+    if (statResave) {
+      statResave.textContent = "IRREGULAR";
+      statResave.style.color = "var(--palette-terracotta)";
+    }
+    statAnomaly.style.color = "var(--palette-terracotta)";
   } else {
     tamperBadge.textContent = "INTEGRITY VERIFIED";
     tamperBadge.className = "status-pill-badge badge--clear";
+
     statSplicing.textContent = "NONE (PASS)";
     statSplicing.style.color = "var(--palette-dark-moss)";
+
     statTextMod.textContent = "UNALTERED";
-    statAnomaly.textContent = "1.84%";
+    statTextMod.style.color = "var(--palette-dark-moss)";
+
+    if (statResave) {
+      statResave.textContent = "STANDARD (1x)";
+      statResave.style.color = "var(--palette-dark-moss)";
+    }
+    statAnomaly.style.color = "var(--palette-dark-moss)";
   }
 
-  // Draw Heatmap Canvas if Base64 received, otherwise render high-frequency gradient
   if (data.elaHeatmap && data.elaHeatmap !== "") {
     const heatImg = new Image();
     heatImg.onload = () => {
@@ -339,7 +355,6 @@ function renderAnalysis(data) {
     };
     heatImg.src = data.elaHeatmap.startsWith("data:") ? data.elaHeatmap : `data:image/jpeg;base64,${data.elaHeatmap}`;
   } else if (loadedImageObj) {
-    // Client-side visual fallback so canvas never sits empty
     elaAnalyzed.width = loadedImageObj.width;
     elaAnalyzed.height = loadedImageObj.height;
     const ctx = elaAnalyzed.getContext("2d");
@@ -357,7 +372,7 @@ function renderAnalysis(data) {
     bioBadge.className = "status-pill-badge badge--clear";
     bioConfidence.textContent = "98.4%";
     bioConfidence.style.color = "var(--palette-dark-moss)";
-    bioStatusMsg.textContent = "IDENTITY CONFIRMED &bull; 1:1 MATCH";
+    bioStatusMsg.textContent = "IDENTITY CONFIRMED • 1:1 MATCH";
     bioCosine.textContent = "0.142 (< 0.40)";
   } else {
     bioBadge.textContent = "BIOMETRIC MISMATCH";

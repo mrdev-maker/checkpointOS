@@ -30,7 +30,6 @@ def read_root():
 async def process_screening(
     document: UploadFile = File(...), live_face: str = Form(...)
 ):
-    
     document_bytes = await document.read()
 
     if not document_bytes:
@@ -45,14 +44,14 @@ async def process_screening(
             detail="Document size exceeds 1MB limit for OCR processing",
         )
 
+    # 1. Digital Forensics (ELA)
     ela_result = analyze_ela(document_bytes)
-    contents = document_bytes
 
+    # 2. Optical Character Recognition (OCR & MRZ)
     try:
-        raw_text = call_ocr_space(contents, document.filename)
+        raw_text = call_ocr_space(document_bytes, document.filename)
         mrz_data = parse_mrz_lines(raw_text)
         fields = extract_fields(raw_text, mrz_data)
-
     except Exception as e:
         print(f"[OCR Warning] Processing issue: {e}")
         mrz_data = {}
@@ -70,7 +69,7 @@ async def process_screening(
     viz_name = fields.name or "NOT FOUND"
     mrz_name = mrz_data.get("full_name") or "UNREADABLE"
 
-    # Token-set reconciliation for names (handles initials, reordering, and multi-word names)
+    # Token-set reconciliation for names
     def clean_name_tokens(text: str) -> set[str]:
         if not text or text in {"NOT FOUND", "UNREADABLE"}:
             return set()
@@ -94,6 +93,15 @@ async def process_screening(
         dob != "UNREADABLE"
         and mrz_dob != "UNREADABLE"
         and dob.strip() == mrz_dob.strip()
+    )
+
+    # Expiry match
+    viz_expiry = fields.expiry_date or "NOT FOUND"
+    mrz_expiry = mrz_data.get("expiry_date") or "NOT FOUND"
+    expiry_match = (
+        viz_expiry not in {"NOT FOUND", "UNREADABLE"}
+        and mrz_expiry not in {"NOT FOUND", "UNREADABLE"}
+        and viz_expiry.strip() == mrz_expiry.strip()
     )
 
     comparisons = [
@@ -129,41 +137,35 @@ async def process_screening(
         },
         {
             "field": "Expiry Date",
-            "viz": fields.expiry_date or "NOT FOUND",
-            "mrz": mrz_data.get("expiry_date") or "NOT FOUND",
-            "match": (
-                fields.expiry_date is not None
-                and mrz_data.get("expiry_date") is not None
-                and fields.expiry_date == mrz_data.get("expiry_date")
-            ),
+            "viz": viz_expiry,
+            "mrz": mrz_expiry,
+            "match": expiry_match,
         },
     ]
 
-   # VIZ ↔ MRZ risk
+    # Weighted Risk Engine
     VIZ_WEIGHTS = {
-    "Passport Number": 15,
-    "Date of Birth": 10,
-    "Nationality": 5,
-    "Full Name": 10,
-    "Expiry Date": 5,
-}
+        "Passport Number": 15,
+        "Date of Birth": 10,
+        "Nationality": 5,
+        "Full Name": 10,
+        "Expiry Date": 5,
+    }
 
     viz_risk = sum(
-    VIZ_WEIGHTS.get(c["field"], 0)
-    for c in comparisons
-    if not c["match"]
-)
-    
-    # MRZ validation risk
+        VIZ_WEIGHTS.get(c["field"], 0)
+        for c in comparisons
+        if not c["match"]
+    )
+
     MRZ_WEIGHTS = {
-    "passport_number": 10,
-    "dob": 5,
-    "expiry_date": 5,
-    "composite": 10,
+        "passport_number": 10,
+        "dob": 5,
+        "expiry_date": 5,
+        "composite": 10,
     }
 
     mrz_risk = 0
-
     check_digits = mrz_data.get("check_digits", {})
 
     if check_digits:
@@ -171,32 +173,27 @@ async def process_screening(
             if not check_digits.get(field, False):
                 mrz_risk += weight
     else:
-        # Fallback until parse_mrz_lines() provides check_digits
-        if not mrz_data.get("valid", False):
+        mrz_has_data = bool(mrz_data.get("passport_number") or mrz_data.get("dob"))
+        if not mrz_has_data:
             mrz_risk = 30
 
-
-    # ELA risk
     ela_risk = 30 if ela_result.get("tamperDetected", False) else 0
 
-
-    # Final risk score
-    calculated_score = min(
-        viz_risk + mrz_risk + ela_risk,
-        100
-    )
+    calculated_score = min(viz_risk + mrz_risk + ela_risk, 100)
+    is_icao_valid = mrz_data.get("valid", bool(mrz_data.get("passport_number") and mrz_data.get("dob")))
 
     return {
-        "riskScore": min(calculated_score, 100),
-
+        "riskScore": calculated_score,
         "riskBreakdown": {
-        "vizMrzRisk": viz_risk,
-        "mrzValidationRisk": mrz_risk,
-        "elaRisk": ela_risk,
+            "vizMrzRisk": viz_risk,
+            "mrzValidationRisk": mrz_risk,
+            "elaRisk": ela_risk,
         },
-        "tamperDetected": ela_result["tamperDetected"],
-        "icaoValid": mrz_data.get("valid", False),
-        "elaHeatmap": ela_result["heatmapDataUrl"],
+        "tamperDetected": ela_result.get("tamperDetected", False),
+        "elaScore": ela_result.get("elaScore", 0.0),
+        "localAnomalyScore": ela_result.get("localAnomalyScore", 0.0),
+        "icaoValid": is_icao_valid,
+        "elaHeatmap": ela_result.get("heatmapDataUrl", ""),
         "comparisons": comparisons,
     }
 
