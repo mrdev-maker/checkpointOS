@@ -32,22 +32,27 @@ async def process_screening(
 ):
     
     document_bytes = await document.read()
-    ela_result = analyze_ela(document_bytes)
 
+    if not document_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="Empty document received",
+        )
 
-    contents = await document.read()
-    if not contents:
-        raise HTTPException(status_code=400, detail="Empty document received")
-    if len(contents) > MAX_FILE_SIZE:
+    if len(document_bytes) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=400,
             detail="Document size exceeds 1MB limit for OCR processing",
         )
 
+    ela_result = analyze_ela(document_bytes)
+    contents = document_bytes
+
     try:
         raw_text = call_ocr_space(contents, document.filename)
         mrz_data = parse_mrz_lines(raw_text)
         fields = extract_fields(raw_text, mrz_data)
+
     except Exception as e:
         print(f"[OCR Warning] Processing issue: {e}")
         mrz_data = {}
@@ -59,7 +64,7 @@ async def process_screening(
     dob = fields.date_of_birth or "UNREADABLE"
     mrz_dob = mrz_data.get("dob") or "UNREADABLE"
 
-    nationality = fields.nationality or "IND"
+    nationality = fields.nationality or "NOT FOUND"
     mrz_nat = mrz_data.get("nationality") or nationality
 
     viz_name = fields.name or "NOT FOUND"
@@ -122,15 +127,75 @@ async def process_screening(
             "mrz": "Live Feed",
             "match": True,
         },
+        {
+            "field": "Expiry Date",
+            "viz": fields.expiry_date or "NOT FOUND",
+            "mrz": mrz_data.get("expiry_date") or "NOT FOUND",
+            "match": (
+                fields.expiry_date is not None
+                and mrz_data.get("expiry_date") is not None
+                and fields.expiry_date == mrz_data.get("expiry_date")
+            ),
+        },
     ]
 
-    mismatches = sum(1 for c in comparisons if not c["match"])
-    calculated_score = 10 + (mismatches * 25)
+   # VIZ ↔ MRZ risk
+    VIZ_WEIGHTS = {
+    "Passport Number": 15,
+    "Date of Birth": 10,
+    "Nationality": 5,
+    "Full Name": 10,
+    "Expiry Date": 5,
+}
+
+    viz_risk = sum(
+    VIZ_WEIGHTS.get(c["field"], 0)
+    for c in comparisons
+    if not c["match"]
+)
+    
+    # MRZ validation risk
+    MRZ_WEIGHTS = {
+    "passport_number": 10,
+    "dob": 5,
+    "expiry_date": 5,
+    "composite": 10,
+    }
+
+    mrz_risk = 0
+
+    check_digits = mrz_data.get("check_digits", {})
+
+    if check_digits:
+        for field, weight in MRZ_WEIGHTS.items():
+            if not check_digits.get(field, False):
+                mrz_risk += weight
+    else:
+        # Fallback until parse_mrz_lines() provides check_digits
+        if not mrz_data.get("valid", False):
+            mrz_risk = 30
+
+
+    # ELA risk
+    ela_risk = 30 if ela_result.get("tamperDetected", False) else 0
+
+
+    # Final risk score
+    calculated_score = min(
+        viz_risk + mrz_risk + ela_risk,
+        100
+    )
 
     return {
         "riskScore": min(calculated_score, 100),
+
+        "riskBreakdown": {
+        "vizMrzRisk": viz_risk,
+        "mrzValidationRisk": mrz_risk,
+        "elaRisk": ela_risk,
+        },
         "tamperDetected": ela_result["tamperDetected"],
-        "icaoValid": mismatches == 0,
+        "icaoValid": mrz_data.get("valid", False),
         "elaHeatmap": ela_result["heatmapDataUrl"],
         "comparisons": comparisons,
     }
